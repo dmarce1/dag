@@ -33,6 +33,9 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 				printf("\tdouble %s;\n", var.c_str());
 			}
 		}
+	}
+	for (int i = 0; i < ins.size(); i++) {
+		const auto var = ins[i].vars[0];
 		printf("\t%s = ", var.c_str());
 		if (ins[i].op == NEG) {
 			printf("-");
@@ -58,6 +61,7 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 }
 
 class node {
+	static int popcnt;
 	node_type type;
 	std::vector<node_ptr> input;
 	std::weak_ptr<node> self_ptr;
@@ -155,6 +159,15 @@ public:
 		ptr->add_input(others...);
 		return ptr;
 	}
+	~node() {
+		popcnt--;
+	}
+	node() {
+		popcnt++;
+	}
+	static int get_pop() {
+		return popcnt;
+	}
 	friend node_ptr operator+(node_ptr a, node_ptr b);
 	friend node_ptr operator-(node_ptr a, node_ptr b);
 	friend node_ptr operator*(node_ptr a, node_ptr b);
@@ -162,6 +175,8 @@ public:
 	friend node_ptr constant(double a);
 	friend node_ptr create_input(int i);
 };
+
+int node::popcnt = 0;
 
 node_ptr constant(double a) {
 	if (a < 0.0) {
@@ -402,13 +417,13 @@ public:
 				node->done = true;
 				for (auto& i : node->input) {
 					if (i->type != CON && i->type != IN) {
-						if (i.use_count() == 1) {
-							//	fprintf( stderr,  "%s\n", i->name.c_str());
+						if (i.use_count() <= 1) {
 							varnames.push(i->name);
 						}
 					}
 				}
 				code.push_back(i);
+				node->input.clear();
 				break;
 			}
 		}
@@ -634,7 +649,7 @@ void print_test_code(int N) {
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 8;
+	constexpr int N = 32;
 	dag graph;
 	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 	graph.optimize();
@@ -644,6 +659,6 @@ int main(int argc, char **argv) {
 	print_test_header();
 	print_code(ins, "test", 2 * N);
 	print_test_code(N);
-	fprintf(stderr, "op cnt = %i\n", ins.size());
+	fprintf(stderr, "pop cnt = %i op cnt = %i\n", node::get_pop(), ins.size());
 	return 0;
 }
