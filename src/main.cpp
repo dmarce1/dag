@@ -15,7 +15,7 @@ using node_ptr = std::shared_ptr<node>;
 #define tiny 1e-14
 
 enum node_type {
-	ADD, SUB, MUL, NEG, IN, CON, OUT
+	ADD, SUB, MUL, NEG, IN, CON, OUT, ASN
 };
 
 struct instruction_t {
@@ -49,7 +49,7 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 			printf(" * ");
 			break;
 		};
-		if (ins[i].op != NEG && ins[i].op != OUT) {
+		if (ins[i].op != NEG && ins[i].op != OUT&& ins[i].op !=ASN) {
 			printf("%s;\n", ins[i].vars[2].c_str());
 		} else {
 			printf(";\n");
@@ -173,7 +173,7 @@ node_ptr constant(double a) {
 
 node_ptr create_input(int i) {
 	auto ptr = node::create(IN);
-	ptr->name = std::string("xin[") + std::to_string(i) + std::string("]");
+	ptr->name = std::string("x[") + std::to_string(i) + std::string("]");
 	ptr->done = true;
 	return ptr;
 }
@@ -217,7 +217,7 @@ public:
 		outputs = std::move(outs);
 		for (int i = 0; i < outputs.size(); i++) {
 			outputs[i] = node::create(OUT, outputs[i]);
-			outputs[i]->name = std::string("xout[") + std::to_string(i)
+			outputs[i]->name = std::string("x[") + std::to_string(i)
 					+ std::string("]");
 		}
 	}
@@ -392,7 +392,18 @@ public:
 			auto n = node_ptr(wnode);
 			if (n->type == CON) {
 				n->name = std::to_string(n->value);
-			} else if (n->type != IN && n->type != OUT) {
+			} else if( n->type == OUT) {
+				if( used_vnames.find(n->name) != used_vnames.end()) {
+					auto other = node_ptr(used_vnames[n->name]);
+					other->name = genvarname(other);
+					instruction_t i;
+					i.op = ASN;
+					i.vars.push_back(other->name);
+					i.vars.push_back(n->name);
+					code.push_back(i);
+
+				}
+			} else if (n->type != IN) {
 				n->name = genvarname(n);
 			}
 			switch (n->type) {
@@ -412,6 +423,7 @@ public:
 					if (i.use_count() == 1) {
 						if (i->type != CON) {
 							free_vnames.push(i->name);
+							used_vnames.erase(i->name);
 						}
 					}
 				}
@@ -537,11 +549,8 @@ void print_test_header() {
 
 void print_code(const std::vector<instruction_t>& ins, std::string fname,
 		int N) {
-	printf("std::vector<double> %s(std::vector<double>& xin) {;\n",
-			fname.c_str());
-	printf("\tstd::vector<double> xout(%i);\n", N);
+	printf("void %s(double* x) {;\n", fname.c_str());
 	print_instructions(ins);
-	printf("\treturn std::move(xout);\n");
 	printf("}\n");
 }
 
@@ -619,7 +628,8 @@ void print_test_code(int N) {
 					"\t\t\t}\n"
 					"\t\t}\n"
 					"\t\ttm1.start();\n"
-					"\t\tauto xout = test(xin);\n"
+					"\t\ttest(xin.data());\n"
+					"\t\tauto xout = xin;\n"
 					"\t\ttm1.stop();\n"
 					"\t\ttm2.start();\n"
 					"\t\tfftw(y);\n"
