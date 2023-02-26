@@ -49,10 +49,10 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 			printf(" * ");
 			break;
 		};
-		if (ins[i].op != NEG && ins[i].op != OUT&& ins[i].op !=ASN) {
+		if (ins[i].op != NEG && ins[i].op != OUT && ins[i].op != ASN) {
 			printf("%s;\n", ins[i].vars[2].c_str());
 		} else {
-			printf(";\n");
+			printf("; // %i\n", ins[i].op);
 		}
 	}
 }
@@ -223,6 +223,7 @@ public:
 	}
 
 	void optimize() {
+//		return;
 		auto nodes = list();
 		std::unordered_map<node*, node_ptr> node_map;
 		for (auto wnode : nodes) {
@@ -364,7 +365,7 @@ public:
 
 	std::vector<instruction_t> generate_instructions() {
 		std::vector<instruction_t> code;
-		std::stack<std::string> free_vnames;
+		std::set<std::string> free_vnames;
 		std::unordered_map<std::string, std::weak_ptr<node>> used_vnames;
 		int varcnt = 0;
 		for (int i = 0; i < inputs.size(); i++) {
@@ -372,6 +373,46 @@ public:
 		}
 		inputs.resize(0);
 		auto nodes = list();
+		std::vector<int> done(nodes.size(), false);
+
+		auto next_node = [&nodes, &done]() {
+			std::vector<int> candidates;
+			for( int i = 0; i < nodes.size(); i++) {
+				if( !done[i]) {
+					bool ready = true;
+					for( auto j : node_ptr(nodes[i])->input) {
+						if( !j->done) {
+							ready = false;
+							break;
+						}
+					}
+					if( ready ) {
+						candidates.push_back(i);
+					}
+				}
+			}
+			if( candidates.size() == 0 ) {
+				return node_ptr(nullptr);
+			} else {
+				int besti = 0;
+				int bestcnt = -1;
+				for( int i = 0; i < candidates.size(); i++) {
+					int cnt = 0;
+					for( auto j : node_ptr(nodes[candidates[i]])->input) {
+						if( j.use_count() == 2) {
+							cnt++;
+						}
+					}
+					if( cnt > bestcnt) {
+						bestcnt = cnt;
+						besti = i;
+					}
+				}
+				done[candidates[besti]] = true;
+				return node_ptr(nodes[candidates[besti]]);
+			}
+		};
+
 		const auto genvarname =
 				[&free_vnames, &varcnt, &used_vnames](std::weak_ptr<node> nd) {
 					std::string nm;
@@ -379,21 +420,23 @@ public:
 						varcnt++;
 						nm = std::string("r") + std::to_string(varcnt);
 					} else {
-						nm = free_vnames.top();
-						free_vnames.pop();
+						nm = *(free_vnames.begin());
+						free_vnames.erase(free_vnames.begin());
 					}
 					used_vnames[nm] = nd;
 					return nm;
 				};
-		for (auto wnode : nodes) {
-			if (wnode.use_count() == 0) {
-				continue;
-			}
-			auto n = node_ptr(wnode);
+		//for (auto wnode : nodes) {
+		//	if (wnode.use_count() == 0) {
+		//		continue;
+		//	}
+		node_ptr n;
+		while ((n = next_node()) != nullptr) {
+
 			if (n->type == CON) {
 				n->name = std::to_string(n->value);
-			} else if( n->type == OUT) {
-				if( used_vnames.find(n->name) != used_vnames.end()) {
+			} else if (n->type == OUT) {
+				if (used_vnames.find(n->name) != used_vnames.end()) {
 					auto other = node_ptr(used_vnames[n->name]);
 					other->name = genvarname(other);
 					instruction_t i;
@@ -401,8 +444,10 @@ public:
 					i.vars.push_back(other->name);
 					i.vars.push_back(n->name);
 					code.push_back(i);
-
+				} else {
+					free_vnames.erase(n->name);
 				}
+				used_vnames[n->name] = n;
 			} else if (n->type != IN) {
 				n->name = genvarname(n);
 			}
@@ -418,11 +463,10 @@ public:
 				for (auto in : n->input) {
 					i.vars.push_back(in->name);
 				}
-				n->done = true;
 				for (auto& i : n->input) {
 					if (i.use_count() == 1) {
-						if (i->type != CON) {
-							free_vnames.push(i->name);
+						if (i->type != CON && i->type != OUT) {
+							free_vnames.insert(i->name);
 							used_vnames.erase(i->name);
 						}
 					}
@@ -430,6 +474,7 @@ public:
 				code.push_back(i);
 				break;
 			}
+			n->done = true;
 			n->input.resize(0);
 		}
 		return code;
@@ -638,7 +683,7 @@ void print_test_code(int N) {
 					"\t\tfor( int n = 0; n < N; n++) {\n"
 					"\t\t\terror += std::pow(xout[2 * n] - y[n].real(), 2);\n"
 					"\t\t\terror += std::pow(xout[2 * n + 1] - y[n].imag(), 2);\n"
-					"\t\t\t//printf( \"%%i %%e %%e %%e %%e;\\n\", n, xout[2*n], xout[2*n+1], y[n].real(), y[n].imag())\n;\n"
+					"\t\t\tprintf( \"%%i %%e %%e %%e %%e;\\n\", n, xout[2*n], xout[2*n+1], y[n].real(), y[n].imag())\n;\n"
 					"\t\t}\n"
 					"\t\terror = error / (2.0 * N);\n"
 					"\t\tif( i == 255 ) {\n"
@@ -652,7 +697,7 @@ void print_test_code(int N) {
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 16;
+	constexpr int N = 8;
 	dag graph;
 	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 	graph.optimize();
@@ -662,6 +707,17 @@ int main(int argc, char **argv) {
 	print_test_header();
 	print_code(ins, "test", 2 * N);
 	print_test_code(N);
-	fprintf(stderr, "op cnt = %i\n", ins.size());
+	int cnt = 0;
+	for (auto i : ins) {
+		switch (i.op) {
+		case ADD:
+		case SUB:
+		case MUL:
+		case NEG:
+			cnt++;
+			break;
+		}
+	}
+	fprintf(stderr, "op cnt = %i\n", cnt);
 	return 0;
 }
