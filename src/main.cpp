@@ -363,11 +363,28 @@ public:
 	}
 
 	std::vector<instruction_t> generate_instructions() {
-		inputs.resize(0);
 		std::vector<instruction_t> code;
-		std::stack<std::string> varnames;
+		std::stack<std::string> free_vnames;
+		std::unordered_map<std::string, std::weak_ptr<node>> used_vnames;
 		int varcnt = 0;
+		for (int i = 0; i < inputs.size(); i++) {
+			used_vnames[inputs[i]->name] = inputs[i];
+		}
+		inputs.resize(0);
 		auto nodes = list();
+		const auto genvarname =
+				[&free_vnames, &varcnt, &used_vnames](std::weak_ptr<node> nd) {
+					std::string nm;
+					if (free_vnames.empty()) {
+						varcnt++;
+						nm = std::string("r") + std::to_string(varcnt);
+					} else {
+						nm = free_vnames.top();
+						free_vnames.pop();
+					}
+					used_vnames[nm] = nd;
+					return nm;
+				};
 		for (auto wnode : nodes) {
 			if (wnode.use_count() == 0) {
 				continue;
@@ -376,13 +393,7 @@ public:
 			if (n->type == CON) {
 				n->name = std::to_string(n->value);
 			} else if (n->type != IN && n->type != OUT) {
-				if (varnames.empty()) {
-					n->name = std::string("r") + std::to_string(varcnt);
-					varcnt++;
-				} else {
-					n->name = varnames.top();
-					varnames.pop();
-				}
+				n->name = genvarname(n);
 			}
 			switch (n->type) {
 			case ADD:
@@ -400,7 +411,7 @@ public:
 				for (auto& i : n->input) {
 					if (i.use_count() == 1) {
 						if (i->type != CON) {
-							varnames.push(i->name);
+							free_vnames.push(i->name);
 						}
 					}
 				}
