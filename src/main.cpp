@@ -15,7 +15,7 @@ using node_ptr = std::shared_ptr<node>;
 #define tiny 1e-14
 
 enum node_type {
-	ADD, SUB, MUL, NEG, IN, CON
+	ADD, SUB, MUL, NEG, IN, CON, OUT
 };
 
 struct instruction_t {
@@ -33,9 +33,6 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 				printf("\tdouble %s;\n", var.c_str());
 			}
 		}
-	}
-	for (int i = 0; i < ins.size(); i++) {
-		const auto var = ins[i].vars[0];
 		printf("\t%s = ", var.c_str());
 		if (ins[i].op == NEG) {
 			printf("-");
@@ -52,7 +49,7 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 			printf(" * ");
 			break;
 		};
-		if (ins[i].op != NEG) {
+		if (ins[i].op != NEG && ins[i].op != OUT) {
 			printf("%s;\n", ins[i].vars[2].c_str());
 		} else {
 			printf(";\n");
@@ -61,12 +58,10 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 }
 
 class node {
-	static int popcnt;
 	node_type type;
 	std::vector<node_ptr> input;
 	std::weak_ptr<node> self_ptr;
 	double value;
-	bool isout;
 	bool done;
 	std::string name;
 	template<class ...Args>
@@ -147,7 +142,6 @@ public:
 	friend class dag;
 	static node_ptr create(node_type op) {
 		auto ptr = std::make_shared<node>();
-		ptr->isout = false;
 		ptr->type = op;
 		ptr->self_ptr = ptr;
 		ptr->done = false;
@@ -159,15 +153,6 @@ public:
 		ptr->add_input(others...);
 		return ptr;
 	}
-	~node() {
-		popcnt--;
-	}
-	node() {
-		popcnt++;
-	}
-	static int get_pop() {
-		return popcnt;
-	}
 	friend node_ptr operator+(node_ptr a, node_ptr b);
 	friend node_ptr operator-(node_ptr a, node_ptr b);
 	friend node_ptr operator*(node_ptr a, node_ptr b);
@@ -175,8 +160,6 @@ public:
 	friend node_ptr constant(double a);
 	friend node_ptr create_input(int i);
 };
-
-int node::popcnt = 0;
 
 node_ptr constant(double a) {
 	if (a < 0.0) {
@@ -233,9 +216,9 @@ public:
 	void set_outputs(std::vector<node_ptr>&& outs) {
 		outputs = std::move(outs);
 		for (int i = 0; i < outputs.size(); i++) {
+			outputs[i] = node::create(OUT, outputs[i]);
 			outputs[i]->name = std::string("xout[") + std::to_string(i)
 					+ std::string("]");
-			outputs[i]->isout = true;
 		}
 	}
 
@@ -307,7 +290,6 @@ public:
 				} else if (node->input[0]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[0]->input[1] * node->input[1];
-					node->input[0]->isout = tmp.isout;
 					node->input[0]->done = tmp.done;
 					node->input[0]->name = tmp.name;
 					node->input.resize(1);
@@ -315,7 +297,6 @@ public:
 				} else if (node->input[1]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[1]->input[0] * node->input[0];
-					node->input[0]->isout = tmp.isout;
 					node->input[0]->done = tmp.done;
 					node->input[0]->name = tmp.name;
 					node->input.resize(1);
@@ -362,7 +343,6 @@ public:
 				} else if (node->input[0]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[0]->input[0] + node->input[1];
-					node->input[0]->isout = tmp.isout;
 					node->input[0]->done = tmp.done;
 					node->input[0]->name = tmp.name;
 					node->input.resize(1);
@@ -383,6 +363,7 @@ public:
 	}
 
 	std::vector<instruction_t> generate_instructions() {
+		inputs.resize(0);
 		std::vector<instruction_t> code;
 		std::stack<std::string> varnames;
 		int varcnt = 0;
@@ -391,41 +372,42 @@ public:
 			if (wnode.use_count() == 0) {
 				continue;
 			}
-			auto node = node_ptr(wnode);
-			if (node->type == CON) {
-				node->name = std::to_string(node->value);
-			} else if (!node->isout && node->type != IN) {
+			auto n = node_ptr(wnode);
+			if (n->type == CON) {
+				n->name = std::to_string(n->value);
+			} else if (n->type != IN && n->type != OUT) {
 				if (varnames.empty()) {
-					node->name = std::string("r") + std::to_string(varcnt);
+					n->name = std::string("r") + std::to_string(varcnt);
 					varcnt++;
 				} else {
-					node->name = varnames.top();
+					n->name = varnames.top();
 					varnames.pop();
 				}
 			}
-			switch (node->type) {
+			switch (n->type) {
 			case ADD:
 			case SUB:
 			case MUL:
 			case NEG:
+			case OUT:
 				instruction_t i;
-				i.op = node->type;
-				i.vars.push_back(node->name);
-				for (auto in : node->input) {
+				i.op = n->type;
+				i.vars.push_back(n->name);
+				for (auto in : n->input) {
 					i.vars.push_back(in->name);
 				}
-				node->done = true;
-				for (auto& i : node->input) {
-					if (i->type != CON && i->type != IN) {
-						if (i.use_count() <= 1) {
+				n->done = true;
+				for (auto& i : n->input) {
+					if (i.use_count() == 1) {
+						if (i->type != CON) {
 							varnames.push(i->name);
 						}
 					}
 				}
 				code.push_back(i);
-				node->input.clear();
 				break;
 			}
+			n->input.resize(0);
 		}
 		return code;
 	}
@@ -649,7 +631,7 @@ void print_test_code(int N) {
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 32;
+	constexpr int N = 16;
 	dag graph;
 	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 	graph.optimize();
@@ -659,6 +641,6 @@ int main(int argc, char **argv) {
 	print_test_header();
 	print_code(ins, "test", 2 * N);
 	print_test_code(N);
-	fprintf(stderr, "pop cnt = %i op cnt = %i\n", node::get_pop(), ins.size());
+	fprintf(stderr, "op cnt = %i\n", ins.size());
 	return 0;
 }
