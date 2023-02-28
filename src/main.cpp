@@ -15,7 +15,7 @@ using node_ptr = std::shared_ptr<node>;
 #define tiny 1e-14
 
 enum node_type {
-	ADD, SUB, MUL, NEG, IN, CON, OUT, ASN
+	ADD, SUB, MUL, FMA, NEG, IN, CON, OUT, ASN
 };
 
 struct instruction_t {
@@ -34,25 +34,29 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 			}
 		}
 		printf("\t%s = ", var.c_str());
-		if (ins[i].op == NEG) {
-			printf("-");
-		}
-		printf("%s", ins[i].vars[1].c_str());
-		switch (ins[i].op) {
-		case ADD:
-			printf(" + ");
-			break;
-		case SUB:
-			printf(" - ");
-			break;
-		case MUL:
-			printf(" * ");
-			break;
-		};
-		if (ins[i].op != NEG && ins[i].op != OUT && ins[i].op != ASN) {
-			printf("%s;\n", ins[i].vars[2].c_str());
+		if (ins[i].op == FMA) {
+			printf("std::fma(%s, %s, %s);\n", ins[i].vars[1].c_str(), ins[i].vars[2].c_str(), ins[i].vars[3].c_str());
 		} else {
-			printf("; // %i\n", ins[i].op);
+			if (ins[i].op == NEG) {
+				printf("-");
+			}
+			printf("%s", ins[i].vars[1].c_str());
+			switch (ins[i].op) {
+			case ADD:
+				printf(" + ");
+				break;
+			case SUB:
+				printf(" - ");
+				break;
+			case MUL:
+				printf(" * ");
+				break;
+			};
+			if (ins[i].op != NEG && ins[i].op != OUT && ins[i].op != ASN) {
+				printf("%s;\n", ins[i].vars[2].c_str());
+			} else {
+				printf("; // %i\n", ins[i].op);
+			}
 		}
 	}
 }
@@ -102,9 +106,7 @@ public:
 					for (int i = 0; i < input.size(); i++) {
 						if (input[i]->type == CON) {
 							if (other->input[i]->type == CON) {
-								if (std::abs(
-										other->input[i]->value
-												- input[i]->value) > tiny) {
+								if (std::abs(other->input[i]->value - input[i]->value) > tiny) {
 									rc = false;
 								}
 							} else {
@@ -158,7 +160,9 @@ public:
 	friend node_ptr operator*(node_ptr a, node_ptr b);
 	friend node_ptr operator-(node_ptr a);
 	friend node_ptr constant(double a);
+	friend node_ptr negative_constant(double a);
 	friend node_ptr create_input(int i);
+	friend node_ptr fma(node_ptr a, node_ptr b, node_ptr c);
 };
 
 node_ptr constant(double a) {
@@ -169,6 +173,16 @@ node_ptr constant(double a) {
 		ptr->value = a;
 		return ptr;
 	}
+}
+
+node_ptr negative_constant(double a) {
+	auto ptr = node::create(CON);
+	ptr->value = a;
+	return ptr;
+}
+
+node_ptr fma(node_ptr a, node_ptr b, node_ptr c) {
+	return node::create(FMA, a, b, c);
 }
 
 node_ptr create_input(int i) {
@@ -217,11 +231,72 @@ public:
 		outputs = std::move(outs);
 		for (int i = 0; i < outputs.size(); i++) {
 			outputs[i] = node::create(OUT, outputs[i]);
-			outputs[i]->name = std::string("x[") + std::to_string(i)
-					+ std::string("]");
+			outputs[i]->name = std::string("x[") + std::to_string(i) + std::string("]");
 		}
 	}
+	void optimize_fma() {
+		auto nodes = list();
+		for (auto wnode : nodes) {
+			if (wnode.use_count() == 0) {
+				continue;
+			}
+			auto node = node_ptr(wnode);
+			node_ptr a, b, c;
+			if (node->type == ADD) {
+				if (node->input[0]->type == MUL) {
+					a = node->input[0]->input[0];
+					b = node->input[0]->input[1];
+					c = node->input[1];
+				} else if (node->input[1]->type == MUL) {
+					a = node->input[1]->input[0];
+					b = node->input[1]->input[1];
+					c = node->input[0];
+				}
+				if (a != nullptr) {
+					node->input.resize(0);
+					node->input.push_back(a);
+					node->input.push_back(b);
+					node->input.push_back(c);
+					node->type = FMA;
+				}
+			} else if (node->type == SUB) {
+				if (node->input[0]->type == MUL) {
+					if (node->input[0]->input[0]->type == CON) {
+						a = negative_constant(-node->input[0]->input[0]->value);
+						b = node->input[0]->input[1];
+						c = node->input[1];
+					} else if (node->input[0]->input[1]->type == CON) {
+						a = negative_constant(-node->input[0]->input[1]->value);
+						b = node->input[0]->input[0];
+						c = node->input[1];
+					}
+					if (a != nullptr) {
+						auto fma_node = fma(a, b, c);
+						node->type = NEG;
+						node->input.resize(0);
+						node->input.push_back(fma_node);
+					}
+				} else if (node->input[1]->type == MUL) {
+					if (node->input[1]->input[0]->type == CON) {
+						a = negative_constant(-node->input[1]->input[0]->value);
+						b = node->input[1]->input[1];
+						c = node->input[0];
+					} else if (node->input[1]->input[1]->type == CON) {
+						a = negative_constant(-node->input[1]->input[1]->value);
+						b = node->input[1]->input[0];
+						c = node->input[0];
+					}
+					if (a != nullptr) {
+						auto fma_node = fma(a, b, c);
+						node->type = NEG;
+						node->input.resize(0);
+						node->input.push_back(fma_node);
+					}
+				}
 
+			}
+		}
+	}
 	void optimize() {
 //		return;
 		auto nodes = list();
@@ -233,8 +308,7 @@ public:
 
 			auto node = node_ptr(wnode);
 			node_ptr ptr = nullptr;
-			if (node->type == ADD || node->type == SUB || node->type == MUL
-					|| node->type == NEG) {
+			if (node->type == ADD || node->type == SUB || node->type == MUL || node->type == NEG) {
 				for (auto i = node_map.begin(); i != node_map.end(); i++) {
 					if (i->second->equivalent(node)) {
 						ptr = i->second;
@@ -255,8 +329,7 @@ public:
 
 			auto node = node_ptr(wnode);
 			for (auto & in : node->input) {
-				if (in->type == ADD || in->type == SUB || in->type == MUL
-						|| in->type == NEG) {
+				if (in->type == ADD || in->type == SUB || in->type == MUL || in->type == NEG) {
 					in = node_map[in.get()];
 				}
 			}
@@ -284,8 +357,7 @@ public:
 				} else if (node->input[1]->none()) {
 					node->input.resize(1);
 					node->type = NEG;
-				} else if (node->input[0]->type == NEG
-						&& node->input[1]->type == NEG) {
+				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
 					node->input[0] = node->input[0]->input[0];
 					node->input[1] = node->input[1]->input[0];
 				} else if (node->input[0]->type == NEG) {
@@ -322,10 +394,8 @@ public:
 				} else if (node->input[1]->type == NEG) {
 					node->type = SUB;
 					node->input[1] = node->input[1]->input[0];
-				} else if (node->input[0]->type == NEG
-						&& node->input[1]->type == NEG) {
-					auto new_node = node->input[0]->input[0]
-							+ node->input[1]->input[0];
+				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+					auto new_node = node->input[0]->input[0] + node->input[1]->input[0];
 					node->type = NEG;
 					node->input[0] = new_node;
 					node->input.resize(1);
@@ -351,8 +421,7 @@ public:
 				} else if (node->input[1]->type == NEG) {
 					node->type = ADD;
 					node->input[1] = node->input[1]->input[0];
-				} else if (node->input[0]->type == NEG
-						&& node->input[1]->type == NEG) {
+				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
 					node->type = ADD;
 					node->input[0] = node->input[0]->input[0];
 					node->input[1] = node->input[1]->input[0];
@@ -413,19 +482,18 @@ public:
 			}
 		};
 
-		const auto genvarname =
-				[&free_vnames, &varcnt, &used_vnames](std::weak_ptr<node> nd) {
-					std::string nm;
-					if (free_vnames.empty()) {
-						varcnt++;
-						nm = std::string("r") + std::to_string(varcnt);
-					} else {
-						nm = *(free_vnames.begin());
-						free_vnames.erase(free_vnames.begin());
-					}
-					used_vnames[nm] = nd;
-					return nm;
-				};
+		const auto genvarname = [&free_vnames, &varcnt, &used_vnames](std::weak_ptr<node> nd) {
+			std::string nm;
+			if (free_vnames.empty()) {
+				varcnt++;
+				nm = std::string("r") + std::to_string(varcnt);
+			} else {
+				nm = *(free_vnames.begin());
+				free_vnames.erase(free_vnames.begin());
+			}
+			used_vnames[nm] = nd;
+			return nm;
+		};
 		//for (auto wnode : nodes) {
 		//	if (wnode.use_count() == 0) {
 		//		continue;
@@ -454,6 +522,7 @@ public:
 			switch (n->type) {
 			case ADD:
 			case SUB:
+			case FMA:
 			case MUL:
 			case NEG:
 			case OUT:
@@ -592,115 +661,114 @@ void print_test_header() {
 			"\t");
 }
 
-void print_code(const std::vector<instruction_t>& ins, std::string fname,
-		int N) {
+void print_code(const std::vector<instruction_t>& ins, std::string fname, int N) {
 	printf("void %s(double* x) {;\n", fname.c_str());
 	print_instructions(ins);
 	printf("}\n");
 }
 
 void print_test_code(int N) {
-	printf(
+	printf("\n"
 			"\n"
-					"\n"
-					"void fftw(std::vector<std::complex<double>>& x) {\n"
-					"\tconst int N = x.size();\n"
-					"\tstatic std::unordered_map<int, fftw_plan> plans;\n"
-					"\tstatic std::unordered_map<int, fftw_complex*> in;\n"
-					"\tstatic std::unordered_map<int, fftw_complex*> out;\n"
-					"\tif (plans.find(N) == plans.end()) {\n"
-					"\t\tin[N] = (fftw_complex*) malloc(sizeof(fftw_complex) * N);\n"
-					"\t\tout[N] = (fftw_complex*) malloc(sizeof(fftw_complex) * N);\n"
-					"\t\tplans[N] = fftw_plan_dft_1d(N, in[N], out[N], FFTW_FORWARD, FFTW_ESTIMATE);\n"
-					"\t}\n"
-					"\tauto* i = in[N];\n"
-					"\tauto* o = out[N];\n"
-					"\tfor (int n = 0; n < N; n++) {\n"
-					"\t\ti[n][0] = x[n].real();\n"
-					"\t\ti[n][1] = x[n].imag();\n"
-					"\t}\n"
-					"\tfftw_execute(plans[N]);\n"
-					"\tfor (int n = 0; n < N; n++) {\n"
-					"\t\tx[n].real(o[n][0]);\n"
-					"\tx[n].imag(o[n][1]);\n"
-					"\t}\n"
-					"}\n"
-					"\n"
-					"\n"
-					"double rand1() {\n"
-					"\treturn (rand() + 0.5) / RAND_MAX;\n"
-					"}\n"
-					"\n");
-	printf(
-			"#include <chrono>\n"
-					"class timer {\n"
-					"\tstd::chrono::time_point<std::chrono::high_resolution_clock> start_time;\n"
-					"\tdouble time;\n"
-					"public:\n"
-					"\tinline timer() {\n"
-					"\t\ttime = 0.0;\n"
-					"\t}\n"
-					"\tinline void stop() {\n"
-					"\t\tstd::chrono::time_point<std::chrono::high_resolution_clock> stop_time = std::chrono::high_resolution_clock::now();\n"
-					"\t\tstd::chrono::duration<double> dur = stop_time - start_time;\n"
-					"\t\ttime += dur.count();\n"
-					"\t}\n"
-					"\tinline void start() {\n"
-					"\t\tstart_time = std::chrono::high_resolution_clock::now();\n"
-					"\t}\n"
-					"\tinline void reset() {\n"
-					"\t\ttime = 0.0;\n"
-					"\t}\n"
-					"\tinline double read() {\n"
-					"\t\treturn time;\n"
-					"\t}\n"
-					"};\n"
-					"\n"
-					"\n"
-					"\n"
-					"int main() {\n"
-					"\tconstexpr int N = %i;\n"
-					"\tstd::vector<double> xin(2 * N);\n"
-					"\tstd::vector<std::complex<double>> y(N);\n"
-					"\ttimer tm1, tm2;\n"
-					"\tfor( int i = 0; i < 256; i++) {\n"
-					"\t\tfor( int n = 0; n < 2 * N; n++) {\n"
-					"\t\t\txin[n] = rand1();\n"
-					"\t\t\tif( n %% 2 == 0 ) {\n"
-					"\t\t\t\ty[n / 2].real(xin[n]);\n"
-					"\t\t\t} else {\n"
-					"\t\t\t\ty[n / 2].imag(xin[n]);\n"
-					"\t\t\t}\n"
-					"\t\t}\n"
-					"\t\ttm1.start();\n"
-					"\t\ttest(xin.data());\n"
-					"\t\tauto xout = xin;\n"
-					"\t\ttm1.stop();\n"
-					"\t\ttm2.start();\n"
-					"\t\tfftw(y);\n"
-					"\t\ttm2.stop();\n"
-					"\t\tdouble error = 0.0;\n"
-					"\t\tfor( int n = 0; n < N; n++) {\n"
-					"\t\t\terror += std::pow(xout[2 * n] - y[n].real(), 2);\n"
-					"\t\t\terror += std::pow(xout[2 * n + 1] - y[n].imag(), 2);\n"
-					"\t\t\tprintf( \"%%i %%e %%e %%e %%e;\\n\", n, xout[2*n], xout[2*n+1], y[n].real(), y[n].imag())\n;\n"
-					"\t\t}\n"
-					"\t\terror = error / (2.0 * N);\n"
-					"\t\tif( i == 255 ) {\n"
-					"\t\t\tprintf( \"Error = %%e\\n\", error );\n"
-					"\t\t}\n"
-					"\t}\n"
-					"\tprintf( \"%%e %%e %%e\\n\", tm1.read(), tm2.read(), tm2.read() / tm1.read() );\n"
-					"\t\n"
-					"}\n"
-					"", N);
+			"void fftw(std::vector<std::complex<double>>& x) {\n"
+			"\tconst int N = x.size();\n"
+			"\tstatic std::unordered_map<int, fftw_plan> plans;\n"
+			"\tstatic std::unordered_map<int, fftw_complex*> in;\n"
+			"\tstatic std::unordered_map<int, fftw_complex*> out;\n"
+			"\tif (plans.find(N) == plans.end()) {\n"
+			"\t\tin[N] = (fftw_complex*) malloc(sizeof(fftw_complex) * N);\n"
+			"\t\tout[N] = (fftw_complex*) malloc(sizeof(fftw_complex) * N);\n"
+			"\t\tplans[N] = fftw_plan_dft_1d(N, in[N], out[N], FFTW_FORWARD, FFTW_ESTIMATE);\n"
+			"\t}\n"
+			"\tauto* i = in[N];\n"
+			"\tauto* o = out[N];\n"
+			"\tfor (int n = 0; n < N; n++) {\n"
+			"\t\ti[n][0] = x[n].real();\n"
+			"\t\ti[n][1] = x[n].imag();\n"
+			"\t}\n"
+			"\tfftw_execute(plans[N]);\n"
+			"\tfor (int n = 0; n < N; n++) {\n"
+			"\t\tx[n].real(o[n][0]);\n"
+			"\tx[n].imag(o[n][1]);\n"
+			"\t}\n"
+			"}\n"
+			"\n"
+			"\n"
+			"double rand1() {\n"
+			"\treturn (rand() + 0.5) / RAND_MAX;\n"
+			"}\n"
+			"\n");
+	printf("#include <chrono>\n"
+			"class timer {\n"
+			"\tstd::chrono::time_point<std::chrono::high_resolution_clock> start_time;\n"
+			"\tdouble time;\n"
+			"public:\n"
+			"\tinline timer() {\n"
+			"\t\ttime = 0.0;\n"
+			"\t}\n"
+			"\tinline void stop() {\n"
+			"\t\tstd::chrono::time_point<std::chrono::high_resolution_clock> stop_time = std::chrono::high_resolution_clock::now();\n"
+			"\t\tstd::chrono::duration<double> dur = stop_time - start_time;\n"
+			"\t\ttime += dur.count();\n"
+			"\t}\n"
+			"\tinline void start() {\n"
+			"\t\tstart_time = std::chrono::high_resolution_clock::now();\n"
+			"\t}\n"
+			"\tinline void reset() {\n"
+			"\t\ttime = 0.0;\n"
+			"\t}\n"
+			"\tinline double read() {\n"
+			"\t\treturn time;\n"
+			"\t}\n"
+			"};\n"
+			"\n"
+			"\n"
+			"\n"
+			"int main() {\n"
+			"\tconstexpr int N = %i;\n"
+			"\tstd::vector<double> xin(2 * N);\n"
+			"\tstd::vector<std::complex<double>> y(N);\n"
+			"\ttimer tm1, tm2;\n"
+			"\tfor( int i = 0; i < 256; i++) {\n"
+			"\t\tfor( int n = 0; n < 2 * N; n++) {\n"
+			"\t\t\txin[n] = rand1();\n"
+			"\t\t\tif( n %% 2 == 0 ) {\n"
+			"\t\t\t\ty[n / 2].real(xin[n]);\n"
+			"\t\t\t} else {\n"
+			"\t\t\t\ty[n / 2].imag(xin[n]);\n"
+			"\t\t\t}\n"
+			"\t\t}\n"
+			"\t\ttm1.start();\n"
+			"\t\ttest(xin.data());\n"
+			"\t\tauto xout = xin;\n"
+			"\t\ttm1.stop();\n"
+			"\t\ttm2.start();\n"
+			"\t\tfftw(y);\n"
+			"\t\ttm2.stop();\n"
+			"\t\tdouble error = 0.0;\n"
+			"\t\tfor( int n = 0; n < N; n++) {\n"
+			"\t\t\terror += std::pow(xout[2 * n] - y[n].real(), 2);\n"
+			"\t\t\terror += std::pow(xout[2 * n + 1] - y[n].imag(), 2);\n"
+			"\t\t\t//printf( \"%%i %%e %%e %%e %%e;\\n\", n, xout[2*n], xout[2*n+1], y[n].real(), y[n].imag())\n;\n"
+			"\t\t}\n"
+			"\t\terror = error / (2.0 * N);\n"
+			"\t\tif( i == 255 ) {\n"
+			"\t\t\tprintf( \"Error = %%e\\n\", error );\n"
+			"\t\t}\n"
+			"\t}\n"
+			"\tprintf( \"%%e %%e %%e\\n\", tm1.read(), tm2.read(), tm2.read() / tm1.read() );\n"
+			"\t\n"
+			"}\n"
+			"", N);
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 8;
+	constexpr int N = 128;
 	dag graph;
 	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 	graph.optimize();
+	graph.optimize();
+	graph.optimize_fma();
 	graph.optimize();
 	graph.optimize();
 	auto ins = graph.generate_instructions();
@@ -708,16 +776,32 @@ int main(int argc, char **argv) {
 	print_code(ins, "test", 2 * N);
 	print_test_code(N);
 	int cnt = 0;
+	int acnt = 0;
+	int add = 0;
+	int mul = 0;
+	int fma = 0;
+	int neg = 0;
 	for (auto i : ins) {
 		switch (i.op) {
+		case FMA:
+			fma++;
+			break;
 		case ADD:
 		case SUB:
+			add++;
+			break;
 		case MUL:
+			mul++;
+			break;
 		case NEG:
-			cnt++;
+			neg++;
+			break;
+		default:
+			acnt++;
 			break;
 		}
 	}
-	fprintf(stderr, "op cnt = %i\n", cnt);
+	cnt = neg + add + mul + fma;
+	fprintf(stderr, "op cnt = %i = %i add/subs + %i muls + %i fmas + %i negations + %i assignments\n", cnt, add, mul, fma, neg, acnt);
 	return 0;
 }
