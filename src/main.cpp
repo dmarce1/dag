@@ -763,7 +763,7 @@ void print_test_code(int N) {
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 128;
+	constexpr int N = 16;
 	dag graph;
 	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 	graph.optimize();
