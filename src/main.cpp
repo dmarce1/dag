@@ -13,7 +13,7 @@ class node;
 
 using node_ptr = std::shared_ptr<node>;
 
-#define tiny 1e-14
+#define tiny 1e-5
 
 enum node_type {
 	ADD, SUB, MUL, FMA, NEG, IN, CON, OUT, ASN
@@ -34,31 +34,51 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 				printf("\tdouble %s;\n", var.c_str());
 			}
 		}
-		printf("\t%s = ", var.c_str());
-		if (ins[i].op == FMA) {
-			printf("std::fma(%s, %s, %s);\n", ins[i].vars[1].c_str(), ins[i].vars[2].c_str(), ins[i].vars[3].c_str());
+		if (ins[i].op == CON) {
+			printf("\tconstexpr double %s = %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
 		} else {
-			if (ins[i].op == NEG) {
-				printf("-");
-			}
-			printf("%s", ins[i].vars[1].c_str());
-			switch (ins[i].op) {
-			case ADD:
-				printf(" + ");
-				break;
-			case SUB:
-				printf(" - ");
-				break;
-			case MUL:
-				printf(" * ");
-				break;
-			default:
-				break;
-			};
-			if (ins[i].op != NEG && ins[i].op != OUT && ins[i].op != ASN) {
-				printf("%s;\n", ins[i].vars[2].c_str());
+			if (ins[i].vars[0] == ins[i].vars[1]) {
+				if (ins[i].op == FMA) {
+					printf("\t%s = std::fma(%s, %s, %s);\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str(), ins[i].vars[3].c_str());
+				} else if (ins[i].op == ADD) {
+					printf("\t%s += %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == SUB) {
+					printf("\t%s -= %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == MUL) {
+					printf("\t%s *= %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == NEG) {
+					printf("\t%s = -%s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				} else if (ins[i].op == ASN || ins[i].op == OUT) {
+					printf("\t%s = %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				}
+			} else if (ins[i].vars.size() > 2 && ins[i].vars[0] == ins[i].vars[1]) {
+				if (ins[i].op == FMA) {
+					printf("\t%s = std::fma(%s, %s, %s);\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str(), ins[i].vars[3].c_str());
+				} else if (ins[i].op == ADD) {
+					printf("\t%s += %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == SUB) {
+					printf("\t%s -= %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == MUL) {
+					printf("\t%s *= %s;\n", ins[i].vars[0].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == NEG) {
+					printf("\t%s = -%s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				} else if (ins[i].op == ASN || ins[i].op == OUT) {
+					printf("\t%s = %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				}
 			} else {
-				printf(";\n", ins[i].op);
+				if (ins[i].op == FMA) {
+					printf("\t%s = std::fma(%s, %s, %s);\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str(), ins[i].vars[3].c_str());
+				} else if (ins[i].op == ADD) {
+					printf("\t%s = %s + %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == SUB) {
+					printf("\t%s = %s - %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == MUL) {
+					printf("\t%s = %s * %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str(), ins[i].vars[2].c_str());
+				} else if (ins[i].op == NEG) {
+					printf("\t%s = -%s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				} else if (ins[i].op == ASN || ins[i].op == OUT) {
+					printf("\t%s = %s;\n", ins[i].vars[0].c_str(), ins[i].vars[1].c_str());
+				}
 			}
 		}
 	}
@@ -101,40 +121,24 @@ public:
 	}
 	bool equivalent(node_ptr other, bool term = false) {
 		bool rc;
-		rc = false;
-		for (int i = 0; i < 2; i++) {
-			if (type == CON) {
-			} else {
-				if (type == other->type) {
-					rc = true;
-					for (unsigned i = 0; i < input.size(); i++) {
-						if (input[i]->type == CON) {
-							if (other->input[i]->type == CON) {
-								if (std::abs(other->input[i]->value - input[i]->value) > tiny) {
-									rc = false;
-								}
-							} else {
-								rc = false;
-							}
-						} else if (input[i].get() != other->input[i].get()) {
-							rc = false;
+		if (type == other->type) {
+			for (unsigned i = 0; i < input.size(); i++) {
+				if (input[i]->type == CON) {
+					if (other->input[i]->type == CON) {
+						if (std::abs(other->input[i]->value - input[i]->value) > tiny) {
+							return false;
 						}
-
+					} else {
+						return false;
 					}
-
+				} else if (input[i].get() != other->input[i].get()) {
+					return false;
 				}
 			}
-			if (i == 0 && !rc && input.size() > 1) {
-				std::swap(input[0], input[1]);
-			}
-			if (i == 1 && input.size() > 1) {
-				std::swap(input[0], input[1]);
-			}
-			if (rc) {
-				break;
-			}
+			return true;
+		} else {
+			return false;
 		}
-		return rc;
 	}
 	bool zero() const {
 		return type == CON && std::abs(value) < tiny;
@@ -167,7 +171,8 @@ public:
 	friend node_ptr negative_constant(double a);
 	friend node_ptr create_input(int i);
 	friend node_ptr fma(node_ptr a, node_ptr b, node_ptr c);
-};
+}
+;
 
 node_ptr constant(double a) {
 	if (a < 0.0) {
@@ -186,7 +191,11 @@ node_ptr negative_constant(double a) {
 }
 
 node_ptr fma(node_ptr a, node_ptr b, node_ptr c) {
-	return node::create(FMA, a, b, c);
+	if ((size_t) a.get() > (size_t) b.get()) {
+		return node::create(FMA, b, a, c);
+	} else {
+		return node::create(FMA, a, b, c);
+	}
 }
 
 node_ptr create_input(int i) {
@@ -197,7 +206,11 @@ node_ptr create_input(int i) {
 }
 
 node_ptr operator+(node_ptr a, node_ptr b) {
-	return node::create(ADD, a, b);
+	if ((size_t) a.get() > (size_t) b.get()) {
+		return node::create(ADD, b, a);
+	} else {
+		return node::create(ADD, a, b);
+	}
 }
 
 node_ptr operator-(node_ptr a, node_ptr b) {
@@ -205,7 +218,11 @@ node_ptr operator-(node_ptr a, node_ptr b) {
 }
 
 node_ptr operator*(node_ptr a, node_ptr b) {
-	return node::create(MUL, a, b);
+	if ((size_t) a.get() > (size_t) b.get()) {
+		return node::create(MUL, b, a);
+	} else {
+		return node::create(MUL, a, b);
+	}
 }
 
 node_ptr operator-(node_ptr a) {
@@ -299,10 +316,12 @@ public:
 		}
 	}
 
-	void optimize() {
+	bool optimize() {
 //		return;
 		auto nodes = list();
+		int sz1 = nodes.size();
 		std::unordered_map<node*, node_ptr> node_map;
+		bool rc = false;
 		for (auto wnode : nodes) {
 			if (wnode.use_count() == 0) {
 				continue;
@@ -310,11 +329,17 @@ public:
 
 			auto node = node_ptr(wnode);
 			node_ptr ptr = nullptr;
-			if (node->type == ADD || node->type == SUB || node->type == MUL || node->type == NEG) {
+			if (node->type == CON || node->type == FMA || node->type == ADD || node->type == SUB || node->type == MUL || node->type == NEG) {
 				for (auto i = node_map.begin(); i != node_map.end(); i++) {
-					if (i->second->equivalent(node)) {
-						ptr = i->second;
-						break;
+					if (node->type == CON) {
+						if (std::abs(node->value - i->second->value) < tiny) {
+							ptr = i->second;
+						}
+					} else {
+						if (i->second->equivalent(node)) {
+							ptr = i->second;
+							break;
+						}
 					}
 				}
 				if (ptr) {
@@ -331,10 +356,60 @@ public:
 
 			auto node = node_ptr(wnode);
 			for (auto & in : node->input) {
-				if (in->type == ADD || in->type == SUB || in->type == MUL || in->type == NEG) {
+				if (in->type == FMA || in->type == ADD || in->type == SUB || in->type == MUL || in->type == NEG) {
 					in = node_map[in.get()];
 				}
 			}
+
+			bool mulcommon = (node->type == ADD || node->type == SUB) && node->input[0]->type == MUL && node->input[1]->type == MUL;
+			bool fmacommon = (node->type == FMA) && (node->input[2]->type == MUL);
+			if (mulcommon || fmacommon) {
+				node_ptr a, b, a0, a1, b0, b1;
+				if (node->type != FMA) {
+					a = node->input[0];
+					b = node->input[1];
+					a0 = a->input[0];
+					a1 = a->input[1];
+					b0 = b->input[0];
+					b1 = b->input[1];
+				} else {
+					b = node->input[2];
+					a0 = node->input[0];
+					a1 = node->input[1];
+					b0 = b->input[0];
+					b1 = b->input[1];
+				}
+				if (a1->type == CON) {
+					std::swap(a0, a1);
+				}
+				if (b1->type == CON) {
+					std::swap(b0, b1);
+				}
+				if (a0->type == CON && b0->type == CON) {
+					if (a1->equivalent(b1)) {
+						node_ptr C;
+						if (node->type != SUB) {
+							C = constant(a0->value + b0->value);
+						} else {
+							C = constant(a0->value - b0->value);
+						}
+						C = a1 * C;
+						node->type = C->type;
+						node->input = C->input;
+					} else if (a0->value != 0.0 && b0->value != 0.0) {
+						node_ptr C;
+						if (node->type != SUB) {
+							C = a0 * (a1 + constant(b0->value / a0->value) * b1);
+						} else {
+							C = a0 * (a1 - constant(b0->value / a0->value) * b1);
+						}
+						node->type = C->type;
+						node->input = C->input;
+						rc = true;
+					}
+				}
+			}
+
 			switch (node->type) {
 			case MUL:
 				if (node->input[0]->zero() || node->input[1]->zero()) {
@@ -342,26 +417,32 @@ public:
 					node->name = std::to_string(0);
 					node->type = CON;
 					node->input.resize(0);
+					rc = true;
 				} else if (node->input[0]->one()) {
 					node->value = node->input[1]->value;
 					node->name = node->input[1]->name;
 					node->type = node->input[1]->type;
 					node->input = node->input[1]->input;
+					rc = true;
 				} else if (node->input[1]->one()) {
 					node->value = node->input[0]->value;
 					node->name = node->input[0]->name;
 					node->type = node->input[0]->type;
 					node->input = node->input[0]->input;
+					rc = true;
 				} else if (node->input[0]->none()) {
 					node->input[0] = node->input[1];
 					node->input.resize(1);
 					node->type = NEG;
+					rc = true;
 				} else if (node->input[1]->none()) {
 					node->input.resize(1);
 					node->type = NEG;
+					rc = true;
 				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
 					node->input[0] = node->input[0]->input[0];
 					node->input[1] = node->input[1]->input[0];
+					rc = true;
 				} else if (node->input[0]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[0]->input[1] * node->input[1];
@@ -369,6 +450,7 @@ public:
 					node->input[0]->name = tmp.name;
 					node->input.resize(1);
 					node->type = NEG;
+					rc = true;
 				} else if (node->input[1]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[1]->input[0] * node->input[0];
@@ -378,24 +460,73 @@ public:
 					node->type = NEG;
 				}
 				break;
+			case FMA:
+				if (node->input[0]->zero() || node->input[1]->zero()) {
+					node->type = node->input[2]->type;
+					node->name = node->input[2]->name;
+					node->value = node->input[2]->value;
+					node->done = node->input[2]->done;
+					rc = true;
+				} else if (node->input[0]->one()) {
+					node->type = ADD;
+					auto a = node->input[1];
+					auto b = node->input[2];
+					node->input.resize(2);
+					node->input[0] = a;
+					node->input[1] = b;
+					rc = true;
+				} else if (node->input[0]->one()) {
+					node->type = ADD;
+					auto a = node->input[0];
+					auto b = node->input[2];
+					node->input.resize(2);
+					node->input[0] = a;
+					node->input[1] = b;
+					rc = true;
+				} else if (node->input[0]->none()) {
+					node->type = SUB;
+					auto a = node->input[1];
+					auto b = node->input[2];
+					node->input.resize(2);
+					node->input[0] = b;
+					node->input[1] = a;
+					rc = true;
+				} else if (node->input[1]->none()) {
+					node->type = SUB;
+					auto a = node->input[0];
+					auto b = node->input[2];
+					node->input.resize(2);
+					node->input[0] = b;
+					node->input[1] = a;
+					rc = true;
+				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+					node->input[0] = node->input[0]->input[0];
+					node->input[1] = node->input[1]->input[0];
+					rc = true;
+				}
+				break;
 			case ADD:
 				if (node->input[0]->zero()) {
 					node->value = node->input[1]->value;
 					node->name = node->input[1]->name;
 					node->type = node->input[1]->type;
 					node->input = node->input[1]->input;
+					rc = true;
 				} else if (node->input[1]->zero()) {
 					node->value = node->input[0]->value;
 					node->name = node->input[0]->name;
 					node->type = node->input[0]->type;
 					node->input = node->input[0]->input;
+					rc = true;
 				} else if (node->input[0]->type == NEG) {
 					node->type = SUB;
 					node->input[0] = node->input[0]->input[0];
 					std::swap(node->input[0], node->input[1]);
+					rc = true;
 				} else if (node->input[1]->type == NEG) {
 					node->type = SUB;
 					node->input[1] = node->input[1]->input[0];
+					rc = true;
 				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
 					auto new_node = node->input[0]->input[0] + node->input[1]->input[0];
 					node->type = NEG;
@@ -408,11 +539,13 @@ public:
 					node->input[0] = node->input[1];
 					node->input.resize(1);
 					node->type = NEG;
+					rc = true;
 				} else if (node->input[1]->zero()) {
 					node->value = node->input[0]->value;
 					node->name = node->input[0]->name;
 					node->type = node->input[0]->type;
 					node->input = node->input[0]->input;
+					rc = true;
 				} else if (node->input[0]->type == NEG) {
 					auto tmp = *node;
 					node->input[0] = node->input[0]->input[0] + node->input[1];
@@ -420,9 +553,11 @@ public:
 					node->input[0]->name = tmp.name;
 					node->input.resize(1);
 					node->type = NEG;
+					rc = true;
 				} else if (node->input[1]->type == NEG) {
 					node->type = ADD;
 					node->input[1] = node->input[1]->input[0];
+					rc = true;
 				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
 					node->type = ADD;
 					node->input[0] = node->input[0]->input[0];
@@ -430,18 +565,42 @@ public:
 					std::swap(node->input[0], node->input[1]);
 				}
 				break;
-			case NEG:
+			default:
 				break;
+			}
+		}
+		return rc;
+	}
+
+	bool optimize2() {
+//		return;
+		auto nodes = list();
+		int sz1 = nodes.size();
+		std::unordered_map<node*, node_ptr> node_map;
+		bool rc = false;
+
+		for (auto wnode : nodes) {
+			if (wnode.use_count() == 0) {
+				continue;
+			}
+
+			auto node = node_ptr(wnode);
+
+			switch (node->type) {
+
+			case NEG:
 				if (node->input[0]->type == CON) {
 					node->type = CON;
 					node->value = -node->input[0]->value;
 					node->input.resize(0);
+					rc = true;
 				}
 				break;
 			default:
 				break;
 			}
 		}
+		return rc;
 	}
 
 	std::vector<instruction_t> generate_instructions() {
@@ -454,6 +613,24 @@ public:
 		}
 		inputs.resize(0);
 		auto nodes = list();
+		int cnt = 0;
+		std::unordered_map<double, std::string> conmap;
+		for (auto w : nodes) {
+			auto n = node_ptr(w);
+			if (n->type == CON) {
+				instruction_t i;
+				i.op = CON;
+				auto nm = conmap[n->value];
+				if (nm == "") {
+					nm = std::string("c") + std::to_string(cnt++);
+					conmap[n->value] = nm;
+					i.vars.push_back(nm);
+					i.vars.push_back(std::to_string(n->value));
+					code.push_back(i);
+				}
+				n->name = nm;
+			}
+		}
 		std::vector<int> done(nodes.size(), false);
 		std::deque<int> last_reads;
 		last_reads.push_back(0);
@@ -549,10 +726,7 @@ public:
 
 		node_ptr n;
 		while ((n = next_node()) != nullptr) {
-
-			if (n->type == CON) {
-				n->name = std::to_string(n->value);
-			} else if (n->type == OUT) {
+			if (n->type == OUT) {
 				if (used_vnames.find(n->name) != used_vnames.end()) {
 					auto other = node_ptr(used_vnames[n->name]);
 					other->name = genvarname(other);
@@ -564,10 +738,22 @@ public:
 				} else {
 					free_vnames.erase(n->name);
 				}
-				used_vnames[n->name] = n;
-			} else if (n->type != IN) {
-				n->name = genvarname(n);
 			}
+			for (auto& i : n->input) {
+				if (i.use_count() == 1) {
+					if (i->type != CON && i->type != OUT) {
+						free_vnames.insert(i->name);
+						used_vnames.erase(i->name);
+					}
+				}
+			}
+			if (n->type != OUT) {
+				if (n->type == CON) {
+				} else if (n->type != IN) {
+					n->name = genvarname(n);
+				}
+			}
+			used_vnames[n->name] = n;
 			switch (n->type) {
 			case ADD:
 			case SUB:
@@ -580,14 +766,6 @@ public:
 				i.vars.push_back(n->name);
 				for (auto in : n->input) {
 					i.vars.push_back(in->name);
-				}
-				for (auto& i : n->input) {
-					if (i.use_count() == 1) {
-						if (i->type != CON && i->type != OUT) {
-							free_vnames.insert(i->name);
-							used_vnames.erase(i->name);
-						}
-					}
 				}
 				code.push_back(i);
 			}
@@ -979,18 +1157,18 @@ void print_test_code(int N) {
 int main(int argc, char **argv) {
 //	constexpr int N1 = 7;
 //	constexpr int N2 = 16;
-	constexpr int N = 5;
+	constexpr int N = 8;
 //	constexpr int N = N1 * N2;
 	dag graph;
-	graph.set_outputs(fft_radixR(graph.get_inputs(2 * N), N, 5));
+	//graph.set_outputs(fft_radixR(graph.get_inputs(2 * N), N, 3));
 //	graph.set_outputs(fft_prime_factor(graph.get_inputs(2 * N1 * N2), N1, N2));
-	//graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
-//	graph.set_outputs(fft_singleton(graph.get_inputs(2 * N), N));
-	graph.optimize();
-	graph.optimize();
+	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
+	//graph.set_outputs(fft_singleton(graph.get_inputs(2 * N), N));
 	graph.optimize_fma();
-	graph.optimize();
-	graph.optimize();
+	while (graph.optimize()) {
+		graph.optimize_fma();
+	}
+	graph.optimize2();
 	auto ins = graph.generate_instructions();
 	print_test_header();
 	print_code(ins, "test", 2 * N);
