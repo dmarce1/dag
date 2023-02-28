@@ -299,7 +299,7 @@ public:
 		}
 	}
 
-	void optimize() {
+	void optimize_common_subexps() {
 //		return;
 		auto nodes = list();
 		std::unordered_map<node*, node_ptr> node_map;
@@ -335,111 +335,169 @@ public:
 					in = node_map[in.get()];
 				}
 			}
-			switch (node->type) {
-			case MUL:
-				if (node->input[0]->zero() || node->input[1]->zero()) {
-					node->value = 0.0;
-					node->name = std::to_string(0);
-					node->type = CON;
-					node->input.resize(0);
-				} else if (node->input[0]->one()) {
-					node->value = node->input[1]->value;
-					node->name = node->input[1]->name;
-					node->type = node->input[1]->type;
-					node->input = node->input[1]->input;
-				} else if (node->input[1]->one()) {
-					node->value = node->input[0]->value;
-					node->name = node->input[0]->name;
-					node->type = node->input[0]->type;
-					node->input = node->input[0]->input;
-				} else if (node->input[0]->none()) {
-					node->input[0] = node->input[1];
-					node->input.resize(1);
-					node->type = NEG;
-				} else if (node->input[1]->none()) {
-					node->input.resize(1);
-					node->type = NEG;
-				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
-					node->input[0] = node->input[0]->input[0];
-					node->input[1] = node->input[1]->input[0];
-				} else if (node->input[0]->type == NEG) {
-					auto tmp = *node;
-					node->input[0] = node->input[0]->input[1] * node->input[1];
-					node->input[0]->done = tmp.done;
-					node->input[0]->name = tmp.name;
-					node->input.resize(1);
-					node->type = NEG;
-				} else if (node->input[1]->type == NEG) {
-					auto tmp = *node;
-					node->input[0] = node->input[1]->input[0] * node->input[0];
-					node->input[0]->done = tmp.done;
-					node->input[0]->name = tmp.name;
-					node->input.resize(1);
-					node->type = NEG;
+		}
+	}
+	void propagate_signs() {
+		bool rc;
+		rc = true;
+		while (rc) {
+			rc = false;
+			auto nodes = list();
+			for (auto wnode : nodes) {
+				if (wnode.use_count() == 0) {
+					continue;
 				}
-				break;
-			case ADD:
-				if (node->input[0]->zero()) {
-					node->value = node->input[1]->value;
-					node->name = node->input[1]->name;
-					node->type = node->input[1]->type;
-					node->input = node->input[1]->input;
-				} else if (node->input[1]->zero()) {
-					node->value = node->input[0]->value;
-					node->name = node->input[0]->name;
-					node->type = node->input[0]->type;
-					node->input = node->input[0]->input;
-				} else if (node->input[0]->type == NEG) {
-					node->type = SUB;
-					node->input[0] = node->input[0]->input[0];
-					std::swap(node->input[0], node->input[1]);
-				} else if (node->input[1]->type == NEG) {
-					node->type = SUB;
-					node->input[1] = node->input[1]->input[0];
-				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
-					auto new_node = node->input[0]->input[0] + node->input[1]->input[0];
-					node->type = NEG;
-					node->input[0] = new_node;
-					node->input.resize(1);
+
+				auto node = node_ptr(wnode);
+				switch (node->type) {
+				case MUL:
+					if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+						node->input[0] = node->input[0]->input[0];
+						node->input[1] = node->input[1]->input[0];
+						rc = true;
+					} else if (node->input[0]->type == NEG) {
+						auto tmp = *node;
+						node->input[0] = node->input[0]->input[1] * node->input[1];
+						node->input[0]->done = tmp.done;
+						node->input[0]->name = tmp.name;
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					} else if (node->input[1]->type == NEG) {
+						auto tmp = *node;
+						node->input[0] = node->input[1]->input[0] * node->input[0];
+						node->input[0]->done = tmp.done;
+						node->input[0]->name = tmp.name;
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					}
+					break;
+				case ADD:
+					if (node->input[0]->type == NEG) {
+						node->type = SUB;
+						node->input[0] = node->input[0]->input[0];
+						std::swap(node->input[0], node->input[1]);
+						rc = true;
+					} else if (node->input[1]->type == NEG) {
+						node->type = SUB;
+						node->input[1] = node->input[1]->input[0];
+						rc = true;
+					} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+						auto new_node = node->input[0]->input[0] + node->input[1]->input[0];
+						node->type = NEG;
+						node->input[0] = new_node;
+						node->input.resize(1);
+						rc = true;
+					}
+					break;
+				case SUB:
+					if (node->input[0]->type == NEG) {
+						auto tmp = *node;
+						node->input[0] = node->input[0]->input[0] + node->input[1];
+						node->input[0]->done = tmp.done;
+						node->input[0]->name = tmp.name;
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					} else if (node->input[1]->type == NEG) {
+						node->type = ADD;
+						node->input[1] = node->input[1]->input[0];
+						rc = true;
+					} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+						node->type = ADD;
+						node->input[0] = node->input[0]->input[0];
+						node->input[1] = node->input[1]->input[0];
+						std::swap(node->input[0], node->input[1]);
+						rc = true;
+					}
+					break;
+				default:
+					break;
 				}
-				break;
-			case SUB:
-				if (node->input[0]->zero()) {
-					node->input[0] = node->input[1];
-					node->input.resize(1);
-					node->type = NEG;
-				} else if (node->input[1]->zero()) {
-					node->value = node->input[0]->value;
-					node->name = node->input[0]->name;
-					node->type = node->input[0]->type;
-					node->input = node->input[0]->input;
-				} else if (node->input[0]->type == NEG) {
-					auto tmp = *node;
-					node->input[0] = node->input[0]->input[0] + node->input[1];
-					node->input[0]->done = tmp.done;
-					node->input[0]->name = tmp.name;
-					node->input.resize(1);
-					node->type = NEG;
-				} else if (node->input[1]->type == NEG) {
-					node->type = ADD;
-					node->input[1] = node->input[1]->input[0];
-				} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
-					node->type = ADD;
-					node->input[0] = node->input[0]->input[0];
-					node->input[1] = node->input[1]->input[0];
-					std::swap(node->input[0], node->input[1]);
+			}
+		}
+	}
+
+	void optimize_constants() {
+		bool rc;
+		rc = true;
+		while (rc) {
+			rc = false;
+			auto nodes = list();
+			for (auto wnode : nodes) {
+				if (wnode.use_count() == 0) {
+					continue;
 				}
-				break;
-			case NEG:
-				break;
-				if (node->input[0]->type == CON) {
-					node->type = CON;
-					node->value = -node->input[0]->value;
-					node->input.resize(0);
+
+				auto node = node_ptr(wnode);
+				switch (node->type) {
+				case MUL:
+					if (node->input[0]->zero() || node->input[1]->zero()) {
+						node->value = 0.0;
+						node->name = std::to_string(0);
+						node->type = CON;
+						node->input.resize(0);
+						rc = true;
+					} else if (node->input[0]->one()) {
+						node->value = node->input[1]->value;
+						node->name = node->input[1]->name;
+						node->type = node->input[1]->type;
+						node->input = node->input[1]->input;
+						rc = true;
+					} else if (node->input[1]->one()) {
+						node->value = node->input[0]->value;
+						node->name = node->input[0]->name;
+						node->type = node->input[0]->type;
+						node->input = node->input[0]->input;
+						rc = true;
+					} else if (node->input[0]->none()) {
+						node->input[0] = node->input[1];
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					} else if (node->input[1]->none()) {
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					} else if (node->input[0]->type == NEG && node->input[1]->type == NEG) {
+						node->input[0] = node->input[0]->input[0];
+						node->input[1] = node->input[1]->input[0];
+						rc = true;
+					}
+					break;
+				case ADD:
+					if (node->input[0]->zero()) {
+						node->value = node->input[1]->value;
+						node->name = node->input[1]->name;
+						node->type = node->input[1]->type;
+						node->input = node->input[1]->input;
+						rc = true;
+					} else if (node->input[1]->zero()) {
+						node->value = node->input[0]->value;
+						node->name = node->input[0]->name;
+						node->type = node->input[0]->type;
+						node->input = node->input[0]->input;
+						rc = true;
+					}
+					break;
+				case SUB:
+					if (node->input[0]->zero()) {
+						node->input[0] = node->input[1];
+						node->input.resize(1);
+						node->type = NEG;
+						rc = true;
+					} else if (node->input[1]->zero()) {
+						node->value = node->input[0]->value;
+						node->name = node->input[0]->name;
+						node->type = node->input[0]->type;
+						node->input = node->input[0]->input;
+						rc = true;
+					}
+					break;
+				default:
+					break;
 				}
-				break;
-			default:
-				break;
 			}
 		}
 	}
@@ -979,18 +1037,17 @@ void print_test_code(int N) {
 int main(int argc, char **argv) {
 //	constexpr int N1 = 7;
 //	constexpr int N2 = 16;
-	constexpr int N = 5;
+	constexpr int N = 9;
 //	constexpr int N = N1 * N2;
 	dag graph;
-	graph.set_outputs(fft_radixR(graph.get_inputs(2 * N), N, 5));
+	graph.set_outputs(fft_radixR(graph.get_inputs(2 * N), N, 3));
 //	graph.set_outputs(fft_prime_factor(graph.get_inputs(2 * N1 * N2), N1, N2));
 	//graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
 //	graph.set_outputs(fft_singleton(graph.get_inputs(2 * N), N));
-	graph.optimize();
-	graph.optimize();
-	graph.optimize_fma();
-	graph.optimize();
-	graph.optimize();
+	graph.optimize_constants();
+	graph.propagate_signs();
+	graph.optimize_common_subexps();
+//	graph.optimize_constants();
 	auto ins = graph.generate_instructions();
 	print_test_header();
 	print_code(ins, "test", 2 * N);
