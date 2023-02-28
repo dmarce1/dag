@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <stack>
 #include <set>
+#include <deque>
 #include <cassert>
 #include <unordered_map>
 
@@ -25,7 +26,7 @@ struct instruction_t {
 
 void print_instructions(const std::vector<instruction_t>& ins) {
 	std::set<std::string> declared;
-	for (int i = 0; i < ins.size(); i++) {
+	for (unsigned i = 0; i < ins.size(); i++) {
 		const auto var = ins[i].vars[0];
 		if (declared.find(var) == declared.end()) {
 			declared.insert(var);
@@ -51,11 +52,13 @@ void print_instructions(const std::vector<instruction_t>& ins) {
 			case MUL:
 				printf(" * ");
 				break;
+			default:
+				break;
 			};
 			if (ins[i].op != NEG && ins[i].op != OUT && ins[i].op != ASN) {
 				printf("%s;\n", ins[i].vars[2].c_str());
 			} else {
-				printf("; // %i\n", ins[i].op);
+				printf(";\n", ins[i].op);
 			}
 		}
 	}
@@ -94,7 +97,8 @@ class node {
 		return nodes;
 	}
 public:
-
+	~node() {
+	}
 	bool equivalent(node_ptr other, bool term = false) {
 		bool rc;
 		rc = false;
@@ -103,7 +107,7 @@ public:
 			} else {
 				if (type == other->type) {
 					rc = true;
-					for (int i = 0; i < input.size(); i++) {
+					for (unsigned i = 0; i < input.size(); i++) {
 						if (input[i]->type == CON) {
 							if (other->input[i]->type == CON) {
 								if (std::abs(other->input[i]->value - input[i]->value) > tiny) {
@@ -215,21 +219,21 @@ public:
 	std::vector<std::weak_ptr<node>> list() const {
 		std::vector<std::weak_ptr<node>> nodes;
 		std::unordered_set<node_ptr> touched;
-		for (int i = 0; i < outputs.size(); i++) {
+		for (unsigned i = 0; i < outputs.size(); i++) {
 			auto tmp = outputs[i]->list(touched);
 			nodes.insert(nodes.end(), tmp.begin(), tmp.end());
 		}
 		return nodes;
 	}
 	std::vector<node_ptr>& get_inputs(int N) {
-		for (int i = 0; i < 2 * N; i++) {
+		for (int i = 0; i < N; i++) {
 			inputs.push_back(create_input(i));
 		}
 		return inputs;
 	}
 	void set_outputs(std::vector<node_ptr>&& outs) {
 		outputs = std::move(outs);
-		for (int i = 0; i < outputs.size(); i++) {
+		for (unsigned i = 0; i < outputs.size(); i++) {
 			outputs[i] = node::create(OUT, outputs[i]);
 			outputs[i]->name = std::string("x[") + std::to_string(i) + std::string("]");
 		}
@@ -243,14 +247,14 @@ public:
 			auto node = node_ptr(wnode);
 			node_ptr a, b, c;
 			if (node->type == ADD) {
-				if (node->input[0]->type == MUL) {
-					a = node->input[0]->input[0];
-					b = node->input[0]->input[1];
-					c = node->input[1];
-				} else if (node->input[1]->type == MUL) {
+				if (node->input[1]->type == MUL) {
 					a = node->input[1]->input[0];
 					b = node->input[1]->input[1];
 					c = node->input[0];
+				} else if (node->input[0]->type == MUL) {
+					a = node->input[0]->input[0];
+					b = node->input[0]->input[1];
+					c = node->input[1];
 				}
 				if (a != nullptr) {
 					node->input.resize(0);
@@ -260,7 +264,20 @@ public:
 					node->type = FMA;
 				}
 			} else if (node->type == SUB) {
-				if (node->input[0]->type == MUL) {
+				if (node->input[1]->type == MUL) {
+					if (node->input[1]->input[0]->type == CON) {
+						a = negative_constant(-node->input[1]->input[0]->value);
+						b = node->input[1]->input[1];
+						c = node->input[0];
+					} else if (node->input[1]->input[1]->type == CON) {
+						a = negative_constant(-node->input[1]->input[1]->value);
+						b = node->input[1]->input[0];
+						c = node->input[0];
+					}
+					if (a != nullptr) {
+						auto node = fma(a, b, c);
+					}
+				} else if (node->input[0]->type == MUL) {
 					if (node->input[0]->input[0]->type == CON) {
 						a = negative_constant(-node->input[0]->input[0]->value);
 						b = node->input[0]->input[1];
@@ -276,27 +293,12 @@ public:
 						node->input.resize(0);
 						node->input.push_back(fma_node);
 					}
-				} else if (node->input[1]->type == MUL) {
-					if (node->input[1]->input[0]->type == CON) {
-						a = negative_constant(-node->input[1]->input[0]->value);
-						b = node->input[1]->input[1];
-						c = node->input[0];
-					} else if (node->input[1]->input[1]->type == CON) {
-						a = negative_constant(-node->input[1]->input[1]->value);
-						b = node->input[1]->input[0];
-						c = node->input[0];
-					}
-					if (a != nullptr) {
-						auto fma_node = fma(a, b, c);
-						node->type = NEG;
-						node->input.resize(0);
-						node->input.push_back(fma_node);
-					}
 				}
 
 			}
 		}
 	}
+
 	void optimize() {
 //		return;
 		auto nodes = list();
@@ -428,6 +430,16 @@ public:
 					std::swap(node->input[0], node->input[1]);
 				}
 				break;
+			case NEG:
+				break;
+				if (node->input[0]->type == CON) {
+					node->type = CON;
+					node->value = -node->input[0]->value;
+					node->input.resize(0);
+				}
+				break;
+			default:
+				break;
 			}
 		}
 	}
@@ -437,16 +449,17 @@ public:
 		std::set<std::string> free_vnames;
 		std::unordered_map<std::string, std::weak_ptr<node>> used_vnames;
 		int varcnt = 0;
-		for (int i = 0; i < inputs.size(); i++) {
+		for (unsigned i = 0; i < inputs.size(); i++) {
 			used_vnames[inputs[i]->name] = inputs[i];
 		}
 		inputs.resize(0);
 		auto nodes = list();
 		std::vector<int> done(nodes.size(), false);
-
-		auto next_node = [&nodes, &done]() {
+		std::deque<int> last_reads;
+		last_reads.push_back(0);
+		auto next_node = [&nodes, &done, &last_reads]() {
 			std::vector<int> candidates;
-			for( int i = 0; i < nodes.size(); i++) {
+			for( unsigned i = 0; i < nodes.size(); i++) {
 				if( !done[i]) {
 					bool ready = true;
 					for( auto j : node_ptr(nodes[i])->input) {
@@ -465,7 +478,7 @@ public:
 			} else {
 				int besti = 0;
 				int bestcnt = -1;
-				for( int i = 0; i < candidates.size(); i++) {
+				for( unsigned i = 0; i < candidates.size(); i++) {
 					int cnt = 0;
 					for( auto j : node_ptr(nodes[candidates[i]])->input) {
 						if( j.use_count() == 2) {
@@ -477,7 +490,46 @@ public:
 						besti = i;
 					}
 				}
+				auto old = candidates;
+				candidates.resize(0);
+				for( unsigned i = 0; i < old.size(); i++) {
+					int cnt = 0;
+					for( auto j : node_ptr(nodes[old[i]])->input) {
+						if( j.use_count() == 2) {
+							cnt++;
+						}
+					}
+					if( cnt == bestcnt) {
+						candidates.push_back(old[i]);
+					}
+				}
+				bestcnt = -1000000000;
+				for( unsigned i = 0; i < old.size(); i++) {
+					int cnt = 0;
+					for( auto j : node_ptr(nodes[old[i]])->input) {
+						int maxdist = 1000000000;
+						if( *(j->name.c_str()) == 'x' ) {
+							for( auto k : last_reads) {
+								maxdist = std::min(maxdist, std::abs(k - atoi(j->name.c_str() + 2)));
+							}
+						}
+						cnt -= maxdist;
+					}
+					if( cnt > bestcnt) {
+						bestcnt = cnt;
+						besti = i;
+					}
+				}
 				done[candidates[besti]] = true;
+				for( auto in : node_ptr(nodes[candidates[besti]])->input ) {
+					if( *(in->name.c_str()) == 'x' ) {
+						auto num = atoi(in->name.c_str() + 2);
+						last_reads.push_front(num);
+						while(last_reads.size() > 5 ) {
+							last_reads.pop_back();
+						}
+					}
+				}
 				return node_ptr(nodes[candidates[besti]]);
 			}
 		};
@@ -494,10 +546,7 @@ public:
 			used_vnames[nm] = nd;
 			return nm;
 		};
-		//for (auto wnode : nodes) {
-		//	if (wnode.use_count() == 0) {
-		//		continue;
-		//	}
+
 		node_ptr n;
 		while ((n = next_node()) != nullptr) {
 
@@ -525,7 +574,7 @@ public:
 			case FMA:
 			case MUL:
 			case NEG:
-			case OUT:
+			case OUT: {
 				instruction_t i;
 				i.op = n->type;
 				i.vars.push_back(n->name);
@@ -541,6 +590,9 @@ public:
 					}
 				}
 				code.push_back(i);
+			}
+				break;
+			default:
 				break;
 			}
 			n->done = true;
@@ -552,10 +604,128 @@ public:
 ;
 
 std::vector<node_ptr> fft_radix2(std::vector<node_ptr> xin, int N);
+std::vector<node_ptr> fft_radix4(std::vector<node_ptr> xin, int N);
+
+std::vector<node_ptr> fft_singleton(std::vector<node_ptr> xin, int N) {
+	std::vector<node_ptr> xout(2 * N);
+	std::vector<node_ptr> txp((N - 1) / 2 + 1);
+	std::vector<node_ptr> txm((N - 1) / 2 + 1);
+	std::vector<node_ptr> typ((N - 1) / 2 + 1);
+	std::vector<node_ptr> tym((N - 1) / 2 + 1);
+	std::vector<node_ptr> ap((N - 1) / 2 + 1);
+	std::vector<node_ptr> am((N - 1) / 2 + 1);
+	std::vector<node_ptr> bp((N - 1) / 2 + 1);
+	std::vector<node_ptr> bm((N - 1) / 2 + 1);
+	for (int j = 1; j <= (N - 1) / 2; j++) {
+		txp[j] = xin[2 * j] + xin[2 * (N - j)];
+		txm[j] = xin[2 * j] - xin[2 * (N - j)];
+		typ[j] = xin[2 * j + 1] + xin[2 * (N - j) + 1];
+		tym[j] = xin[2 * j + 1] - xin[2 * (N - j) + 1];
+	}
+	xout[0] = xin[0];
+	xout[1] = xin[1];
+	for (int j = 1; j <= (N - 1) / 2; j++) {
+		xout[0] = xout[0] + txp[j];
+		xout[1] = xout[1] + typ[j];
+	}
+	for (int j = 1; j <= (N - 1) / 2; j++) {
+		ap[j] = xin[0];
+		bp[j] = xin[1];
+		for (int k = 1; k <= (N - 1) / 2; k++) {
+			ap[j] = ap[j] + txp[k] * constant(cos(2.0 * M_PI * j * k / N));
+			bp[j] = bp[j] + typ[k] * constant(cos(2.0 * M_PI * j * k / N));
+			if (k == 1) {
+				am[j] = tym[k] * constant(sin(2.0 * M_PI * j * k / N));
+				bm[j] = txm[k] * constant(sin(2.0 * M_PI * j * k / N));
+			} else {
+				am[j] = am[j] + tym[k] * constant(sin(2.0 * M_PI * j * k / N));
+				bm[j] = bm[j] + txm[k] * constant(sin(2.0 * M_PI * j * k / N));
+
+			}
+		}
+		am[j] = -am[j];
+		bm[j] = -bm[j];
+		xout[2 * j] = ap[j] - am[j];
+		xout[2 * j + 1] = bp[j] + bm[j];
+		xout[2 * (N - j)] = ap[j] + am[j];
+		xout[2 * (N - j) + 1] = bp[j] - bm[j];
+	}
+	return xout;
+}
+
+std::vector<node_ptr> fft_radix(std::vector<node_ptr> xin, int N) {
+	if (N == 2) {
+		return fft_radix4(xin, 2);
+	} else if (N == 4) {
+		return fft_radix4(xin, 4);
+	} else if (N == 8) {
+		return fft_radix4(xin, 8);
+	} else if (N == 16) {
+		return fft_radix4(xin, 16);
+	} else {
+		return fft_singleton(xin, N);
+	}
+}
+
+std::vector<node_ptr> fft_short(std::vector<node_ptr> xin, int N) {
+	if (N == 2) {
+		return fft_radix4(xin, 2);
+	} else if (N == 4) {
+		return fft_radix4(xin, 4);
+	} else if (N == 8) {
+		return fft_radix4(xin, 8);
+	} else {
+		return fft_singleton(xin, N);
+	}
+}
+
+std::vector<node_ptr> fft_prime_factor(std::vector<node_ptr> xin, int N1, int N2) {
+	int N = N1 * N2;
+	std::vector<node_ptr> xout(2 * N);
+	std::vector<std::vector<node_ptr>> z(N2, std::vector<node_ptr>(2 * N1));
+	std::vector<std::vector<node_ptr>> y(N1, std::vector<node_ptr>(2 * N2));
+	for (int n1 = 0; n1 < N1; n1++) {
+		for (int n2 = 0; n2 < N2; n2++) {
+			y[n1][2 * n2] = xin[2 * ((N1 * n2 + N2 * n1) % N)];
+			y[n1][2 * n2 + 1] = xin[2 * ((N1 * n2 + N2 * n1) % N) + 1];
+		}
+	}
+	for (int n1 = 0; n1 < N1; n1++) {
+		y[n1] = fft_radix(y[n1], N2);
+	}
+	for (int n1 = 0; n1 < N1; n1++) {
+		for (int k2 = 0; k2 < N2; k2++) {
+			z[k2][2 * n1] = y[n1][2 * k2];
+			z[k2][2 * n1 + 1] = y[n1][2 * k2 + 1];
+		}
+	}
+	for (int n2 = 0; n2 < N2; n2++) {
+		z[n2] = fft_radix(z[n2], N1);
+	}
+	for (int n = 0; n < N; n++) {
+		int n1 = n % N1;
+		int n2 = n % N2;
+		xout[2 * n] = z[n2][2 * n1];
+		xout[2 * n + 1] = z[n2][2 * n1 + 1];
+	}
+	fprintf(stderr, "%i %i\n", xin.size(), xout.size());
+	return xout;
+}
 
 std::vector<node_ptr> fft_radix4(std::vector<node_ptr> xin, int N) {
 	if (N == 1) {
 		return xin;
+	} else if (N == 2) {
+		std::vector<node_ptr> xout(4);
+		auto x0 = xin[0] + xin[2];
+		auto x1 = xin[0] - xin[2];
+		auto y0 = xin[1] + xin[3];
+		auto y1 = xin[1] - xin[3];
+		xout[0] = x0;
+		xout[1] = y0;
+		xout[2] = x1;
+		xout[3] = y1;
+		return xout;
 	}
 	std::vector<node_ptr> xout(2 * N);
 	std::vector<node_ptr> even, odd1, odd3;
@@ -645,6 +815,50 @@ std::vector<node_ptr> fft_radix2(std::vector<node_ptr> xin, int N) {
 		xout[2 * (k + N / 2)] = even[2 * k] - tr;
 		xout[2 * k + 1] = even[2 * k + 1] + ti;
 		xout[2 * (k + N / 2) + 1] = even[2 * k + 1] - ti;
+	}
+	return xout;
+}
+
+std::vector<node_ptr> fft_radixR(std::vector<node_ptr> xin, int N, int R) {
+	if (N == 1) {
+		return xin;
+	} else if (N == R) {
+		return fft_singleton(xin, R);
+	}
+	std::vector<node_ptr> xout(2 * N);
+	std::vector<std::vector<node_ptr>> sub(R, std::vector<node_ptr>(2 * N / R));
+
+	for (int n = 0; n < N / R; n++) {
+		for (int r = 0; r < R; r++) {
+			sub[r][2 * n] = xin[2 * (n * R + r)];
+			sub[r][2 * n + 1] = xin[2 * (n * R + r) + 1];
+		}
+	}
+	for (int r = 0; r < R; r++) {
+		sub[r] = fft_radixR(sub[r], N / R, R);
+	}
+	for (int k = 1; k < N / R; k++) {
+		for (int r = 1; r < R; r++) {
+			auto x = sub[r][2 * k];
+			auto y = sub[r][2 * k + 1];
+			auto phi = -2.0 * M_PI * r * k / N;
+			auto cs = constant(cos(phi));
+			auto sn = constant(sin(phi));
+			sub[r][2 * k + 0] = x * cs - y * sn;
+			sub[r][2 * k + 1] = x * sn + y * cs;
+		}
+	}
+	for (int k = 0; k < N / R; k++) {
+		std::vector<node_ptr> y(2 * R);
+		for (int r = 0; r < R; r++) {
+			y[2 * r] = sub[r][2 * k];
+			y[2 * r + 1] = sub[r][2 * k + 1];
+		}
+		y = fft_singleton(y, R);
+		for (int r = 0; r < R; r++) {
+			xout[2 * (r * N / R + k)] = y[2 * r];
+			xout[2 * (r * N / R + k) + 1] = y[2 * r + 1];
+		}
 	}
 	return xout;
 }
@@ -763,9 +977,15 @@ void print_test_code(int N) {
 }
 
 int main(int argc, char **argv) {
-	constexpr int N = 16;
+//	constexpr int N1 = 7;
+//	constexpr int N2 = 16;
+	constexpr int N = 5;
+//	constexpr int N = N1 * N2;
 	dag graph;
-	graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
+	graph.set_outputs(fft_radixR(graph.get_inputs(2 * N), N, 5));
+//	graph.set_outputs(fft_prime_factor(graph.get_inputs(2 * N1 * N2), N1, N2));
+	//graph.set_outputs(fft_radix4(graph.get_inputs(2 * N), N));
+//	graph.set_outputs(fft_singleton(graph.get_inputs(2 * N), N));
 	graph.optimize();
 	graph.optimize();
 	graph.optimize_fma();
